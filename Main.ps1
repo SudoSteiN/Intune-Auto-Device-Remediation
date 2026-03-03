@@ -34,6 +34,14 @@
 .PARAMETER ClientSecret
     App registration client secret for app-only authentication.
 
+.PARAMETER AppConfigEndpoint
+    Azure App Configuration endpoint URL (e.g., https://myconfig.azconfig.io).
+    Uses managed identity or Azure CLI for authentication.
+
+.PARAMETER AppConfigConnectionString
+    Azure App Configuration connection string. Alternative to endpoint when
+    managed identity is not available.
+
 .PARAMETER GenerateHtmlReport
     Switch to generate an HTML dashboard report in addition to CSV.
 
@@ -44,6 +52,14 @@
 .EXAMPLE
     # Live execution with app-only auth, stale devices only
     .\Main.ps1 -Execute -Scope StaleOnly -TenantId $tid -ClientId $cid -ClientSecret $sec
+
+.EXAMPLE
+    # Use Azure App Configuration for all settings (managed identity)
+    .\Main.ps1 -AppConfigEndpoint "https://onbe-it-apps-ac.azconfig.io" -Verbose
+
+.EXAMPLE
+    # Use Azure App Configuration with connection string
+    .\Main.ps1 -AppConfigConnectionString $connStr -Execute
 
 .EXAMPLE
     # Dry-run with HTML report and custom config
@@ -69,6 +85,10 @@ param(
 
     [string]$ClientSecret,
 
+    [string]$AppConfigEndpoint,
+
+    [string]$AppConfigConnectionString,
+
     [switch]$GenerateHtmlReport
 )
 
@@ -86,6 +106,7 @@ $runTimestamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $modulesPath = Join-Path $PSScriptRoot "Modules"
 
 Write-Verbose "Loading modules from '$modulesPath'..."
+Import-Module (Join-Path $modulesPath "AppConfig.psm1") -Force
 Import-Module (Join-Path $modulesPath "Auth.psm1") -Force
 Import-Module (Join-Path $modulesPath "DeviceDiscovery.psm1") -Force
 Import-Module (Join-Path $modulesPath "Remediation.psm1") -Force
@@ -94,12 +115,35 @@ Import-Module (Join-Path $modulesPath "Reporting.psm1") -Force
 # ─────────────────────────────────────────────────────────────
 # Load Configuration
 # ─────────────────────────────────────────────────────────────
-Write-Verbose "Loading configuration from '$ConfigPath'..."
+
+# 1. Load local config file as the baseline / fallback
+Write-Verbose "Loading local configuration from '$ConfigPath'..."
 if (-not (Test-Path $ConfigPath)) {
     throw "Configuration file not found at '$ConfigPath'. Please create it or specify a valid path with -ConfigPath."
 }
 
 $config = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
+
+# 2. If App Configuration is specified, fetch remote settings and merge
+$appConfigSettings = $null
+if ($AppConfigEndpoint -or $AppConfigConnectionString) {
+    $source = if ($AppConfigEndpoint) { $AppConfigEndpoint } else { "connection string" }
+    Write-Host "Loading settings from Azure App Configuration ($source)..." -ForegroundColor Cyan
+
+    $appConfigParams = @{}
+    if ($AppConfigEndpoint) {
+        $appConfigParams.Endpoint = $AppConfigEndpoint
+    }
+    else {
+        $appConfigParams.ConnectionString = $AppConfigConnectionString
+    }
+
+    $appConfigSettings = Get-AppConfiguration @appConfigParams
+    $config = Merge-Configuration -AppConfigSettings $appConfigSettings -LocalConfig $config
+
+    Write-Host "App Configuration settings merged. Remote values override local defaults." -ForegroundColor Green
+}
+
 Write-Verbose "Configuration loaded: Warning=$($config.staleDays_Warning)d, Critical=$($config.staleDays_Critical)d, Abandoned=$($config.staleDays_Abandoned)d"
 Write-Verbose "Actions enabled: SyncNudge=$($config.enableSyncNudge), Disable=$($config.enableDisable), Retire=$($config.enableRetire), Delete=$($config.enableDelete)"
 
@@ -112,6 +156,21 @@ $exclusionList = Get-ExclusionList -Path $ExclusionPath
 # ─────────────────────────────────────────────────────────────
 # Authenticate to Microsoft Graph
 # ─────────────────────────────────────────────────────────────
+
+# CLI parameters override App Configuration values for auth credentials
+if (-not $TenantId -and $appConfigSettings -and $appConfigSettings.ContainsKey("TenantId")) {
+    $TenantId = $appConfigSettings["TenantId"]
+    Write-Verbose "TenantId loaded from App Configuration."
+}
+if (-not $ClientId -and $appConfigSettings -and $appConfigSettings.ContainsKey("ClientId")) {
+    $ClientId = $appConfigSettings["ClientId"]
+    Write-Verbose "ClientId loaded from App Configuration."
+}
+if (-not $ClientSecret -and $appConfigSettings -and $appConfigSettings.ContainsKey("ClientSecret")) {
+    $ClientSecret = $appConfigSettings["ClientSecret"]
+    Write-Verbose "ClientSecret loaded from App Configuration (via Key Vault reference)."
+}
+
 Write-Host ""
 if ($TenantId -and $ClientId -and $ClientSecret) {
     Write-Host "Authenticating with app-only (client credentials) flow..." -ForegroundColor Cyan
@@ -119,7 +178,7 @@ if ($TenantId -and $ClientId -and $ClientSecret) {
 }
 else {
     Write-Host "Authenticating with interactive (delegated) flow..." -ForegroundColor Cyan
-    Write-Host "  (Provide -TenantId, -ClientId, -ClientSecret for unattended app-only auth)" -ForegroundColor Gray
+    Write-Host "  (Provide -TenantId, -ClientId, -ClientSecret or -AppConfigEndpoint for unattended app-only auth)" -ForegroundColor Gray
     $connectParams = @{}
     if ($TenantId) { $connectParams.TenantId = $TenantId }
     $authContext = Connect-GraphInteractive @connectParams
