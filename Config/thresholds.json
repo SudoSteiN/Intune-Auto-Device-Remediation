@@ -1,0 +1,11 @@
+{
+  "staleDays_Warning": 30,
+  "staleDays_Critical": 60,
+  "staleDays_Abandoned": 90,
+  "enableSyncNudge": true,
+  "enableDisable": true,
+  "enableRetire": false,
+  "enableDelete": false,
+  "maxDevicesPerRun": 500,
+  "batchSize": 20
+}

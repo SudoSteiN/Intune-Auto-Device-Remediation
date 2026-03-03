@@ -1,0 +1,5 @@
+# Reports output (generated at runtime)
+Output/*.csv
+Output/*.html
+Output/*.json
+!Output/.gitkeep

@@ -1,0 +1,4 @@
+DeviceId,DeviceName,UserPrincipalName,Reason
+,CONF-ROOM-01,,Conference room device
+,KIOSK-LOBBY,,Shared kiosk device
+,,vip.user@contoso.com,VIP executive device
