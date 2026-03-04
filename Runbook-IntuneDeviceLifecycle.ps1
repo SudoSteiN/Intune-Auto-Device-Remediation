@@ -275,7 +275,7 @@ function Get-AllManagedDevices {
         if ($MaxDevices -gt 0 -and $allDevices.Count -ge $MaxDevices) {
             Write-Warning "Reached maximum device limit ($MaxDevices). Stopping pagination."
             $allDevices = [System.Collections.Generic.List[object]]::new(
-                $allDevices | Select-Object -First $MaxDevices
+                @($allDevices | Select-Object -First $MaxDevices)
             )
             break
         }
